@@ -312,7 +312,6 @@ export default class Scanner extends Component {
     let hierarchy: CV = null;
     let bestApprox: CV = null;
     let bestArea = 0;
-
     try {
       src = cv.imread(canvas);
       gray = new cv.Mat();
@@ -320,22 +319,22 @@ export default class Scanner extends Component {
       edges = new cv.Mat();
       dilated = new cv.Mat();
       kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-      
+
       // Analyze background brightness
       const meanScalar = cv.mean(gray);
       const avgBrightness = meanScalar[0];
       const isLightBackground = avgBrightness > 155;
-
-      // For light backgrounds, enhance contrast and use edge-preserving blur
+      // Strategy for light backgrounds: Contrast stretch + Inversion
       if (isLightBackground) {
-        const clahe = new cv.CLAHE(2.0, new cv.Size(8, 8));
-        clahe.apply(gray, gray);
-        clahe.delete();
-        
-        // Bilateral filter is much better at preserving edges than Gaussian blur
-        // especially when the edge contrast is low
+        // Manual contrast stretching (Normalization)
+        cv.normalize(gray, gray, 0, 255, cv.NORM_MINMAX);
+
+        // Invert image: White document becomes dark on a dark background
+        // This often helps Canny find edges in high-key scenes
+        cv.bitwise_not(gray, gray);
+
+        // Bilateral filter preserves edges better than Gaussian blur for low contrast
         const temp = new cv.Mat();
         cv.bilateralFilter(gray, temp, 9, 75, 75);
         temp.copyTo(blurred);
@@ -343,35 +342,30 @@ export default class Scanner extends Component {
       } else {
         cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
       }
-
       const imgArea = canvas.width * canvas.height;
-
+      const minAreaFactor = isLightBackground ? 0.15 : 0.05;
       const findBestContour = (canny1: number, canny2: number) => {
         cv.Canny(blurred, edges, canny1, canny2);
         cv.dilate(edges, dilated, kernel);
-
         if (contours) contours.delete();
         if (hierarchy) hierarchy.delete();
         contours = new cv.MatVector();
         hierarchy = new cv.Mat();
-
         cv.findContours(dilated, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
-
         let localBestApprox: CV = null;
         let localBestArea = 0;
-
         for (let i = 0; i < contours.size(); i++) {
           const c = contours.get(i);
           const area = cv.contourArea(c);
           c.delete();
-          if (area < imgArea * 0.05 || area > imgArea * 0.98) continue;
 
+          // Use adjusted minimum area to filter out noise on bright backgrounds
+          if (area < imgArea * minAreaFactor || area > imgArea * 0.99) continue;
           const cont = contours.get(i);
           const peri = cv.arcLength(cont, true);
           const approx = new cv.Mat();
           cv.approxPolyDP(cont, approx, 0.02 * peri, true);
           cont.delete();
-
           if (approx.rows === 4 && area > localBestArea) {
             localBestApprox?.delete();
             localBestArea = area;
@@ -382,16 +376,13 @@ export default class Scanner extends Component {
         }
         return { approx: localBestApprox, area: localBestArea };
       };
-
       // Pass 1: Standard contrast or light-adapted contrast
-      // If background is light, start with more sensitive thresholds
       const t1 = isLightBackground ? 20 : 50;
       const t2 = isLightBackground ? 60 : 150;
-      
+
       const pass1 = findBestContour(t1, t2);
       bestApprox = pass1.approx;
       bestArea = pass1.area;
-
       // Pass 2: High-sensitivity Canny fallback
       if (!bestApprox || bestArea < imgArea * 0.2) {
         const pass2 = findBestContour(10, 40);
@@ -403,38 +394,32 @@ export default class Scanner extends Component {
           pass2.approx?.delete();
         }
       }
-
-      // Pass 3: Ultimate Fallback - Adaptive Thresholding (Great for white-on-white)
-      // This handles cases where Canny fails due to extremely low contrast gradients
+      // Pass 3: Ultimate Fallback - Adaptive Thresholding
       if (!bestApprox || bestArea < imgArea * 0.2) {
         const adaptive = new cv.Mat();
-        // Use adaptive thresholding to find local differences
-        cv.adaptiveThreshold(blurred, adaptive, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
-        
-        // Morphological closing to fill in text and internal holes, leaving the document shape
-        const closeKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-        cv.morphologyEx(adaptive, dilated, cv.MORPH_CLOSE, closeKernel);
-        closeKernel.delete();
+        const adaptiveDilated = new cv.Mat();
 
+        // Adaptive thresholding on the blurred image
+        cv.adaptiveThreshold(blurred, adaptive, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
+
+        const closeKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+        cv.morphologyEx(adaptive, adaptiveDilated, cv.MORPH_CLOSE, closeKernel);
+        closeKernel.delete();
         if (contours) contours.delete();
         if (hierarchy) hierarchy.delete();
         contours = new cv.MatVector();
         hierarchy = new cv.Mat();
-
-        cv.findContours(dilated, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
-
+        cv.findContours(adaptiveDilated, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
         for (let i = 0; i < contours.size(); i++) {
           const c = contours.get(i);
           const area = cv.contourArea(c);
           c.delete();
-          if (area < imgArea * 0.1 || area > imgArea * 0.98) continue;
-
+          if (area < imgArea * minAreaFactor || area > imgArea * 0.99) continue;
           const cont = contours.get(i);
           const peri = cv.arcLength(cont, true);
           const approx = new cv.Mat();
           cv.approxPolyDP(cont, approx, 0.02 * peri, true);
           cont.delete();
-
           if (approx.rows === 4 && area > bestArea) {
             bestApprox?.delete();
             bestArea = area;
@@ -444,8 +429,8 @@ export default class Scanner extends Component {
           }
         }
         adaptive.delete();
+        adaptiveDilated.delete();
       }
-
       let result: Point[] | null = null;
       if (bestApprox && bestArea > imgArea * 0.05) {
         const pts: Point[] = [];
@@ -459,6 +444,7 @@ export default class Scanner extends Component {
       console.warn('Edge detection error:', e);
       return null;
     } finally {
+      // Cleanup all Mats
       src?.delete();
       gray?.delete();
       blurred?.delete();
