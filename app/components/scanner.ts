@@ -302,158 +302,164 @@ export default class Scanner extends Component {
 
   private detectDocumentCorners(canvas: HTMLCanvasElement): Point[] | null {
     const cv: CV = window.cv;
-    let src: any = null,
-      gray: any = null,
-      blurred: any = null,
-      edges: any = null,
-      dilated: any = null,
-      kernel: any = null;
-    let contours: CV = null;
-    let hierarchy: CV = null;
-    let bestApprox: CV = null;
+    // --- Pre-declare all Mats for safe cleanup in finally block ---
+    let src: any = null, gray: any = null, blurred: any = null, edges: any = null, dilated: any = null;
+    let kernel3: any = null, kernel7: any = null, kernel15: any = null;
+    let gradX: any = null, gradY: any = null, absX: any = null, absY: any = null, gradMag: any = null;
+    let channels: any = null, blueChannel: any = null, blueEdges: any = null;
+    let adaptive: any = null;
+    let contours: any = null, hierarchy: any = null, bestApprox: any = null;
     let bestArea = 0;
+
     try {
       src = cv.imread(canvas);
+      const imgArea = canvas.width * canvas.height;
+      
+      // Initialize common Mats
       gray = new cv.Mat();
       blurred = new cv.Mat();
       edges = new cv.Mat();
       dilated = new cv.Mat();
-      kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+      kernel3 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+      kernel7 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(7, 7));
+      kernel15 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(15, 15));
+
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-
-      // Analyze background brightness
-      const meanScalar = cv.mean(gray);
-      const avgBrightness = meanScalar[0];
-      const isLightBackground = avgBrightness > 155;
-      // Strategy for light backgrounds: Contrast stretch + Inversion
-      if (isLightBackground) {
-        // Manual contrast stretching (Normalization)
-        cv.normalize(gray, gray, 0, 255, cv.NORM_MINMAX);
-
-        // Invert image: White document becomes dark on a dark background
-        // This often helps Canny find edges in high-key scenes
-        cv.bitwise_not(gray, gray);
-
-        // Bilateral filter preserves edges better than Gaussian blur for low contrast
-        const temp = new cv.Mat();
-        cv.bilateralFilter(gray, temp, 9, 75, 75);
-        temp.copyTo(blurred);
-        temp.delete();
-      } else {
-        cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-      }
-      const imgArea = canvas.width * canvas.height;
-      const minAreaFactor = isLightBackground ? 0.15 : 0.05;
-      const findBestContour = (canny1: number, canny2: number) => {
-        cv.Canny(blurred, edges, canny1, canny2);
-        cv.dilate(edges, dilated, kernel);
+      
+      // Helper to find the best quadrilateral from a binary/edge map
+      const findQuad = (map: any, minFactor = 0.1, maxFactor = 0.9): any => {
         if (contours) contours.delete();
         if (hierarchy) hierarchy.delete();
         contours = new cv.MatVector();
         hierarchy = new cv.Mat();
-        cv.findContours(dilated, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
-        let localBestApprox: CV = null;
-        let localBestArea = 0;
+        
+        cv.findContours(map, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+        
+        let foundApprox: any = null;
+        let foundArea = 0;
+
         for (let i = 0; i < contours.size(); i++) {
           const c = contours.get(i);
           const area = cv.contourArea(c);
           c.delete();
+          
+          if (area < imgArea * minFactor || area > imgArea * maxFactor) continue;
 
-          // Use adjusted minimum area to filter out noise on bright backgrounds
-          if (area < imgArea * minAreaFactor || area > imgArea * 0.99) continue;
           const cont = contours.get(i);
           const peri = cv.arcLength(cont, true);
           const approx = new cv.Mat();
           cv.approxPolyDP(cont, approx, 0.02 * peri, true);
           cont.delete();
-          if (approx.rows === 4 && area > localBestArea) {
-            localBestApprox?.delete();
-            localBestArea = area;
-            localBestApprox = approx;
+
+          if (approx.rows === 4 && area > foundArea) {
+            foundApprox?.delete();
+            foundArea = area;
+            foundApprox = approx;
           } else {
             approx.delete();
           }
         }
-        return { approx: localBestApprox, area: localBestArea };
+        return { approx: foundApprox, area: foundArea };
       };
-      // Pass 1: Standard contrast or light-adapted contrast
-      const t1 = isLightBackground ? 20 : 50;
-      const t2 = isLightBackground ? 60 : 150;
 
-      const pass1 = findBestContour(t1, t2);
-      bestApprox = pass1.approx;
-      bestArea = pass1.area;
-      // Pass 2: High-sensitivity Canny fallback
-      if (!bestApprox || bestArea < imgArea * 0.2) {
-        const pass2 = findBestContour(10, 40);
-        if (pass2.approx && pass2.area > bestArea) {
-          bestApprox?.delete();
-          bestApprox = pass2.approx;
-          bestArea = pass2.area;
-        } else {
-          pass2.approx?.delete();
+      // --- STRATEGY 1: Shadow detection (Shadow edges at boundary) ---
+      const meanScalar = cv.mean(gray);
+      const isLight = meanScalar[0] > 150;
+      
+      // Use large blur to ignore text but keep document silhouette
+      cv.GaussianBlur(gray, blurred, new cv.Size(21, 21), 0);
+      
+      // Ultra-low thresholds to catch the faint shadow "lip"
+      cv.Canny(blurred, edges, 15, 45);
+      // Heavy dilation to bridge gaps in faint shadow edges
+      cv.dilate(edges, dilated, kernel7, new cv.Point(-1, -1), 3);
+      
+      const res1 = findQuad(dilated, isLight ? 0.15 : 0.1, 0.9);
+      if (res1.approx) {
+        bestApprox = res1.approx;
+        bestArea = res1.area;
+      }
+
+      // --- STRATEGY 2: Sobel Gradient Magnitude (Texture/Contrast boundary) ---
+      if (!bestApprox) {
+        gradX = new cv.Mat();
+        gradY = new cv.Mat();
+        absX = new cv.Mat();
+        absY = new cv.Mat();
+        gradMag = new cv.Mat();
+
+        cv.Sobel(blurred, gradX, cv.CV_16S, 1, 0, 3);
+        cv.Sobel(blurred, gradY, cv.CV_16S, 0, 1, 3);
+        cv.convertScaleAbs(gradX, absX);
+        cv.convertScaleAbs(gradY, absY);
+        cv.addWeighted(absX, 0.5, absY, 0.5, 0, gradMag);
+        
+        // Otsu automatically finds the best threshold for texture boundaries
+        cv.threshold(gradMag, edges, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
+        cv.dilate(edges, dilated, kernel3);
+        
+        const res2 = findQuad(dilated, 0.1, 0.9);
+        if (res2.approx) {
+          bestApprox = res2.approx;
+          bestArea = res2.area;
         }
       }
-      // Pass 3: Ultimate Fallback - Adaptive Thresholding
-      if (!bestApprox || bestArea < imgArea * 0.2) {
-        const adaptive = new cv.Mat();
-        const adaptiveDilated = new cv.Mat();
 
-        // Adaptive thresholding on the blurred image
-        cv.adaptiveThreshold(blurred, adaptive, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
-
-        const closeKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-        cv.morphologyEx(adaptive, adaptiveDilated, cv.MORPH_CLOSE, closeKernel);
-        closeKernel.delete();
-        if (contours) contours.delete();
-        if (hierarchy) hierarchy.delete();
-        contours = new cv.MatVector();
-        hierarchy = new cv.Mat();
-        cv.findContours(adaptiveDilated, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
-        for (let i = 0; i < contours.size(); i++) {
-          const c = contours.get(i);
-          const area = cv.contourArea(c);
-          c.delete();
-          if (area < imgArea * minAreaFactor || area > imgArea * 0.99) continue;
-          const cont = contours.get(i);
-          const peri = cv.arcLength(cont, true);
-          const approx = new cv.Mat();
-          cv.approxPolyDP(cont, approx, 0.02 * peri, true);
-          cont.delete();
-          if (approx.rows === 4 && area > bestArea) {
-            bestApprox?.delete();
-            bestArea = area;
-            bestApprox = approx;
-          } else {
-            approx.delete();
-          }
+      // --- STRATEGY 3: Blue Channel Split (Spectral difference) ---
+      if (!bestApprox) {
+        channels = new cv.MatVector();
+        cv.split(src, channels);
+        blueChannel = channels.get(2); // Blue is usually channel 2 in RGBA
+        
+        cv.GaussianBlur(blueChannel, blurred, new cv.Size(5, 5), 0);
+        cv.Canny(blurred, blueEdges, 30, 100);
+        cv.dilate(blueEdges, dilated, kernel3);
+        
+        const res3 = findQuad(dilated, 0.1, 0.9);
+        if (res3.approx) {
+          bestApprox = res3.approx;
+          bestArea = res3.area;
         }
-        adaptive.delete();
-        adaptiveDilated.delete();
       }
-      let result: Point[] | null = null;
-      if (bestApprox && bestArea > imgArea * 0.05) {
+
+      // --- STRATEGY 4: Adaptive Threshold Fallback ---
+      if (!bestApprox) {
+        adaptive = new cv.Mat();
+        // Local thresholding is best for high-brightness/low-contrast
+        cv.adaptiveThreshold(gray, adaptive, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 21, 4);
+        // Fill in internal gaps (text) to reveal the document box
+        cv.morphologyEx(adaptive, dilated, cv.MORPH_CLOSE, kernel15);
+        
+        const res4 = findQuad(dilated, 0.1, 0.9);
+        if (res4.approx) {
+          bestApprox = res4.approx;
+          bestArea = res4.area;
+        }
+      }
+
+      // --- Final result assembly ---
+      if (bestApprox) {
         const pts: Point[] = [];
         for (let i = 0; i < 4; i++) {
           pts.push([bestApprox.data32S[i * 2], bestApprox.data32S[i * 2 + 1]]);
         }
-        result = this.orderCorners(pts);
+        return this.orderCorners(pts);
       }
-      return result;
+      
+      return null;
     } catch (e) {
       console.warn('Edge detection error:', e);
       return null;
     } finally {
-      // Cleanup all Mats
-      src?.delete();
-      gray?.delete();
-      blurred?.delete();
-      edges?.delete();
-      dilated?.delete();
-      kernel?.delete();
-      contours?.delete();
-      hierarchy?.delete();
-      bestApprox?.delete();
+      // --- Aggressive Cleanup ---
+      [src, gray, blurred, edges, dilated, kernel3, kernel7, kernel15, 
+       gradX, gradY, absX, absY, gradMag, blueChannel, blueEdges, 
+       adaptive, contours, hierarchy, bestApprox].forEach(m => {
+        try { m?.delete(); } catch {}
+      });
+      if (channels) {
+        try { channels.delete(); } catch {}
+      }
     }
   }
 
