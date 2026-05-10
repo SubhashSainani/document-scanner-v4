@@ -328,14 +328,21 @@ export default class Scanner extends Component {
       const avgBrightness = meanScalar[0];
       const isLightBackground = avgBrightness > 155;
 
-      // For light backgrounds, enhance contrast to detect subtle shadows/edges
+      // For light backgrounds, enhance contrast and use edge-preserving blur
       if (isLightBackground) {
         const clahe = new cv.CLAHE(2.0, new cv.Size(8, 8));
         clahe.apply(gray, gray);
         clahe.delete();
+        
+        // Bilateral filter is much better at preserving edges than Gaussian blur
+        // especially when the edge contrast is low
+        const temp = new cv.Mat();
+        cv.bilateralFilter(gray, temp, 9, 75, 75);
+        temp.copyTo(blurred);
+        temp.delete();
+      } else {
+        cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
       }
-
-      cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
 
       const imgArea = canvas.width * canvas.height;
 
@@ -385,9 +392,8 @@ export default class Scanner extends Component {
       bestApprox = pass1.approx;
       bestArea = pass1.area;
 
-      // Pass 2: Fallback to high-sensitivity if Pass 1 failed to find a large enough document
+      // Pass 2: High-sensitivity Canny fallback
       if (!bestApprox || bestArea < imgArea * 0.2) {
-        // Even more sensitive thresholds for extremely low-contrast shadows
         const pass2 = findBestContour(10, 40);
         if (pass2.approx && pass2.area > bestArea) {
           bestApprox?.delete();
@@ -396,6 +402,48 @@ export default class Scanner extends Component {
         } else {
           pass2.approx?.delete();
         }
+      }
+
+      // Pass 3: Ultimate Fallback - Adaptive Thresholding (Great for white-on-white)
+      // This handles cases where Canny fails due to extremely low contrast gradients
+      if (!bestApprox || bestArea < imgArea * 0.2) {
+        const adaptive = new cv.Mat();
+        // Use adaptive thresholding to find local differences
+        cv.adaptiveThreshold(blurred, adaptive, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
+        
+        // Morphological closing to fill in text and internal holes, leaving the document shape
+        const closeKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+        cv.morphologyEx(adaptive, dilated, cv.MORPH_CLOSE, closeKernel);
+        closeKernel.delete();
+
+        if (contours) contours.delete();
+        if (hierarchy) hierarchy.delete();
+        contours = new cv.MatVector();
+        hierarchy = new cv.Mat();
+
+        cv.findContours(dilated, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+
+        for (let i = 0; i < contours.size(); i++) {
+          const c = contours.get(i);
+          const area = cv.contourArea(c);
+          c.delete();
+          if (area < imgArea * 0.1 || area > imgArea * 0.98) continue;
+
+          const cont = contours.get(i);
+          const peri = cv.arcLength(cont, true);
+          const approx = new cv.Mat();
+          cv.approxPolyDP(cont, approx, 0.02 * peri, true);
+          cont.delete();
+
+          if (approx.rows === 4 && area > bestArea) {
+            bestApprox?.delete();
+            bestArea = area;
+            bestApprox = approx;
+          } else {
+            approx.delete();
+          }
+        }
+        adaptive.delete();
       }
 
       let result: Point[] | null = null;
