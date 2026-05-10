@@ -322,6 +322,19 @@ export default class Scanner extends Component {
       kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
 
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      
+      // Analyze background brightness
+      const meanScalar = cv.mean(gray);
+      const avgBrightness = meanScalar[0];
+      const isLightBackground = avgBrightness > 155;
+
+      // For light backgrounds, enhance contrast to detect subtle shadows/edges
+      if (isLightBackground) {
+        const clahe = new cv.CLAHE(2.0, new cv.Size(8, 8));
+        clahe.apply(gray, gray);
+        clahe.delete();
+      }
+
       cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
 
       const imgArea = canvas.width * canvas.height;
@@ -363,14 +376,19 @@ export default class Scanner extends Component {
         return { approx: localBestApprox, area: localBestArea };
       };
 
-      // Pass 1: Standard contrast (works well for dark backgrounds)
-      const pass1 = findBestContour(50, 150);
+      // Pass 1: Standard contrast or light-adapted contrast
+      // If background is light, start with more sensitive thresholds
+      const t1 = isLightBackground ? 20 : 50;
+      const t2 = isLightBackground ? 60 : 150;
+      
+      const pass1 = findBestContour(t1, t2);
       bestApprox = pass1.approx;
       bestArea = pass1.area;
 
-      // Pass 2: Low contrast (works well for white documents on light backgrounds)
+      // Pass 2: Fallback to high-sensitivity if Pass 1 failed to find a large enough document
       if (!bestApprox || bestArea < imgArea * 0.2) {
-        const pass2 = findBestContour(15, 50);
+        // Even more sensitive thresholds for extremely low-contrast shadows
+        const pass2 = findBestContour(10, 40);
         if (pass2.approx && pass2.area > bestArea) {
           bestApprox?.delete();
           bestApprox = pass2.approx;
