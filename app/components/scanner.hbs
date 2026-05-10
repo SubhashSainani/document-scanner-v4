@@ -1,0 +1,205 @@
+<div id="app" {{did-insert this.initScanner}}>
+  {{! ═══════════════════════════════ HOME SCREEN ═══════════════════════ }}
+  <div id="home-view" class="screen active">
+    <div class="home-top">
+      <div class="home-icon">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none">
+          <rect x="3" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2" />
+          <rect x="14" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2" />
+          <rect x="3" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2" />
+          <rect x="14" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2" />
+        </svg>
+      </div>
+      <h1 class="home-title">Scanner :</h1>
+      <p class="home-sub">Scan, enhance &amp; export documents</p>
+    </div>
+
+    <div class="home-cta">
+      <button id="start-scan-btn" class="scan-cta-btn" type="button">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+          <circle cx="12" cy="13" r="4" />
+        </svg>
+        Scan Document
+      </button>
+    </div>
+
+    <div class="home-recents">
+      <div class="recents-header">
+        <span class="recents-title">Recent Scans</span>
+        <button id="clear-recents-btn" class="recents-clear" type="button">Clear</button>
+      </div>
+      <div id="recents-grid" class="recents-grid">
+        <div class="no-recents">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" opacity="0.3">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+          </svg>
+          <span>No recent scans yet</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {{! ═══════════════════════════════ CAMERA SCREEN ════════════════════ }}
+  <div id="camera-view" class="screen">
+    <div class="cam-header">
+      <button id="close-camera-btn" class="icon-btn" type="button">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
+      <span class="cam-title">Scan</span>
+      <button id="flash-btn" class="icon-btn" title="Flash (not available in browser)" type="button">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+        </svg>
+      </button>
+    </div>
+
+    <div id="cam-container">
+      {{! template-lint-disable no-forbidden-elements }}
+      <video id="video" playsinline autoplay muted></video>
+      <canvas id="overlay"></canvas>
+      <div id="scan-line"></div>
+      <div id="detect-badge">
+        <span class="badge-dot"></span>
+        Document Detected
+      </div>
+      <div id="scan-guide">
+        <div class="corner tl"></div>
+        <div class="corner tr"></div>
+        <div class="corner br"></div>
+        <div class="corner bl"></div>
+      </div>
+    </div>
+
+    <div class="cam-footer">
+      <div class="cam-hint" id="cam-hint">Align document within frame</div>
+      <button id="capture-btn" aria-label="Capture" type="button">
+        <div class="capture-ring"></div>
+        <div class="capture-dot"></div>
+      </button>
+      {{! spacer to balance the hint left/right }}
+      <div class="cam-hint" style="opacity:0">·</div>
+    </div>
+  </div>
+
+  {{! ═══════════════════════════════ ADJUST SCREEN ════════════════════ }}
+  <div id="preview-view" class="screen">
+    <div class="screen-header">
+      <button id="retake-btn" class="header-btn" type="button">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+        Retake
+      </button>
+      <span class="screen-title">Adjust</span>
+      <button id="confirm-btn" class="header-btn accent" type="button">
+        Confirm
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      </button>
+    </div>
+
+    <div id="preview-container">
+      <canvas id="preview-canvas"></canvas>
+      <canvas id="corner-canvas"></canvas>
+      <div id="magnifier"></div>
+    </div>
+
+    <div class="adjust-footer">
+      <p class="footer-hint">Drag corners to adjust document edges</p>
+      <button id="auto-fix-btn" class="secondary-btn" type="button">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
+        </svg>
+        Auto Detect Edges
+      </button>
+    </div>
+  </div>
+
+  {{! ═══════════════════════════════ RESULT SCREEN ════════════════════ }}
+  <div id="result-view" class="screen">
+    <div class="screen-header">
+      <button id="scan-again-btn" class="header-btn" type="button">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <polyline points="15 18 9 12 15 6" />
+        </svg>
+        New Scan
+      </button>
+      <span class="screen-title">Result</span>
+      <div style="width:72px"></div>
+    </div>
+
+    <div id="result-container">
+      <canvas id="result-canvas"></canvas>
+    </div>
+
+    <div class="result-footer">
+      <div class="result-actions">
+        <button id="save-image-btn" class="action-btn" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+          <span>Save PNG</span>
+        </button>
+        <button id="export-pdf-btn" class="action-btn accent" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+            <polyline points="10 9 9 9 8 9" />
+          </svg>
+          <span>Export PDF</span>
+        </button>
+        <button id="share-btn" class="action-btn" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" />
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+          </svg>
+          <span>Share</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  {{! ═══════════════════════════════ EXPORT MODAL ══════════════════════ }}
+  <div id="export-modal" class="modal-backdrop">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <h3 class="modal-title">Export PDF</h3>
+
+      <label class="modal-label">Paper Size</label>
+      <div class="seg-control" id="format-seg">
+        <button class="seg-btn active" data-val="auto" type="button">Auto</button>
+        <button class="seg-btn" data-val="a4" type="button">A4</button>
+        <button class="seg-btn" data-val="letter" type="button">Letter</button>
+        <button class="seg-btn" data-val="a3" type="button">A3</button>
+      </div>
+
+      <label class="modal-label">Quality</label>
+      <div class="seg-control" id="quality-seg">
+        <button class="seg-btn" data-val="standard" type="button">Standard</button>
+        <button class="seg-btn active" data-val="high" type="button">High</button>
+        <button class="seg-btn" data-val="ultra" type="button">Ultra</button>
+      </div>
+
+      <div class="modal-actions">
+        <button id="modal-cancel" class="modal-btn secondary" type="button">Cancel</button>
+        <button id="modal-export" class="modal-btn primary" type="button">Export PDF</button>
+      </div>
+    </div>
+  </div>
+
+  {{! ═══════════════════════════════ LOADING OVERLAY ═══════════════════ }}
+  <div id="loading-overlay">
+    <div class="spinner"></div>
+    <p id="loading-text">Loading…</p>
+  </div>
+</div>
