@@ -58,7 +58,7 @@ export default class Scanner extends Component {
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
-  override willDestroy(): void {
+  willDestroy(): void {
     super.willDestroy();
     this.stopCamera();
     this.cleanupCornerEvents?.();
@@ -302,7 +302,17 @@ export default class Scanner extends Component {
 
   private detectDocumentCorners(canvas: HTMLCanvasElement): Point[] | null {
     const cv: CV = window.cv;
-    let src, gray, blurred, edges, dilated, kernel, contours, hierarchy;
+    let src: any = null,
+      gray: any = null,
+      blurred: any = null,
+      edges: any = null,
+      dilated: any = null,
+      kernel: any = null;
+    let contours: CV = null;
+    let hierarchy: CV = null;
+    let bestApprox: CV = null;
+    let bestArea = 0;
+
     try {
       src = cv.imread(canvas);
       gray = new cv.Mat();
@@ -310,37 +320,63 @@ export default class Scanner extends Component {
       edges = new cv.Mat();
       dilated = new cv.Mat();
       kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-      contours = new cv.MatVector();
-      hierarchy = new cv.Mat();
 
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
       cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-      cv.Canny(blurred, edges, 50, 150);
-      cv.dilate(edges, dilated, kernel);
-      cv.findContours(dilated, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
 
       const imgArea = canvas.width * canvas.height;
-      let bestApprox: CV = null;
-      let bestArea = 0;
 
-      for (let i = 0; i < contours.size(); i++) {
-        const c = contours.get(i);
-        const area = cv.contourArea(c);
-        c.delete();
-        if (area < imgArea * 0.05 || area > imgArea * 0.98) continue;
+      const findBestContour = (canny1: number, canny2: number) => {
+        cv.Canny(blurred, edges, canny1, canny2);
+        cv.dilate(edges, dilated, kernel);
 
-        const cont = contours.get(i);
-        const peri = cv.arcLength(cont, true);
-        const approx = new cv.Mat();
-        cv.approxPolyDP(cont, approx, 0.02 * peri, true);
-        cont.delete();
+        if (contours) contours.delete();
+        if (hierarchy) hierarchy.delete();
+        contours = new cv.MatVector();
+        hierarchy = new cv.Mat();
 
-        if (approx.rows === 4 && area > bestArea) {
+        cv.findContours(dilated, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+
+        let localBestApprox: CV = null;
+        let localBestArea = 0;
+
+        for (let i = 0; i < contours.size(); i++) {
+          const c = contours.get(i);
+          const area = cv.contourArea(c);
+          c.delete();
+          if (area < imgArea * 0.05 || area > imgArea * 0.98) continue;
+
+          const cont = contours.get(i);
+          const peri = cv.arcLength(cont, true);
+          const approx = new cv.Mat();
+          cv.approxPolyDP(cont, approx, 0.02 * peri, true);
+          cont.delete();
+
+          if (approx.rows === 4 && area > localBestArea) {
+            localBestApprox?.delete();
+            localBestArea = area;
+            localBestApprox = approx;
+          } else {
+            approx.delete();
+          }
+        }
+        return { approx: localBestApprox, area: localBestArea };
+      };
+
+      // Pass 1: Standard contrast (works well for dark backgrounds)
+      const pass1 = findBestContour(50, 150);
+      bestApprox = pass1.approx;
+      bestArea = pass1.area;
+
+      // Pass 2: Low contrast (works well for white documents on light backgrounds)
+      if (!bestApprox || bestArea < imgArea * 0.2) {
+        const pass2 = findBestContour(15, 50);
+        if (pass2.approx && pass2.area > bestArea) {
           bestApprox?.delete();
-          bestArea = area;
-          bestApprox = approx;
+          bestApprox = pass2.approx;
+          bestArea = pass2.area;
         } else {
-          approx.delete();
+          pass2.approx?.delete();
         }
       }
 
@@ -351,9 +387,6 @@ export default class Scanner extends Component {
           pts.push([bestApprox.data32S[i * 2], bestApprox.data32S[i * 2 + 1]]);
         }
         result = this.orderCorners(pts);
-        bestApprox.delete();
-      } else {
-        bestApprox?.delete();
       }
       return result;
     } catch (e) {
@@ -368,6 +401,7 @@ export default class Scanner extends Component {
       kernel?.delete();
       contours?.delete();
       hierarchy?.delete();
+      bestApprox?.delete();
     }
   }
 

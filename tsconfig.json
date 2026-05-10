@@ -11,8 +11,14 @@
     "experimentalDecorators": true,
     "useDefineForClassFields": false,
     "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "document-scanner/*": ["app/*"],
+      "document-scanner/tests/*": ["tests/*"],
+      "*": ["node_modules/@types/*"]
+    },
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["app/**/*"],
+  "include": ["app/**/*", "tests/**/*", "config/**/*", "types/**/*"],
   "exclude": ["node_modules", "dist"]
 }
